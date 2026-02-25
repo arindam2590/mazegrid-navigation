@@ -1,0 +1,236 @@
+import json
+import os
+import torch
+import numpy as np
+
+
+class Agent:
+    def __init__(self, env):
+        param_dir = 'Simulation/Utils/'
+        with open(param_dir + 'config.json', 'r') as file:
+            self.params = json.load(file)
+
+        self.model_save_path = self.params['DATA_DIR'] + self.params['MAZE_MODEL_DIR']
+        if not os.path.exists(self.model_save_path):
+            os.makedirs(self.model_save_path)
+
+        self.env = env
+        self.position = None
+        self.radius = self.params['RADIUS']
+        self.model_name = None
+        self.model = None
+        self.state_size = self.env.maze_size * self.env.maze_size
+        self.action_size = self.params['ACTION_SIZE']
+        self.batch_size = self.params['BATCH_SIZE']
+        self.model_filename = None
+        self.game_steps = 0
+        self.epch = self.params["epochs"]
+
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+            print(f'Info: GPU is available...')
+        else:
+            self.device = torch.device("cpu")
+            print(f'Info: CPU is available...')
+
+        self.visited_states = None
+        self.max_no_progress_steps = 10
+        self.no_progress_steps = 0
+        self.last_distance_to_goal = None
+
+        self.success_episodes = []
+        self.total_steps = []
+
+    def move(self, direction):
+        self.position += direction
+
+    def reset(self):
+        self.position = np.array(self.env.source)
+        self.visited_states = set()
+        return self._get_state()
+
+    def _get_state(self):
+        agent_state_index = self.position[0] * self.env.maze_size + self.position[1]
+        return agent_state_index
+
+    def step(self, action):
+        self.game_steps += 1
+        terminated, truncated, info = False, False, {'Success': False}
+        direction = np.array((self.env.directions[action][0], self.env.directions[action][1]))
+        new_position = [self.position[0] + direction[0], self.position[1] + direction[1]]
+
+        if self.env.is_valid_position(new_position):
+            self.move(direction)
+            if np.array_equal(self.position, self.env.destination):
+                print(f'\nInfo: HURRAY!! Agent has reached its destination...')
+                reward = 5.0
+                terminated = True
+                self.game_steps = 0
+                info['Success'] = True
+            else:
+                reward = 0.05
+                if self.game_steps >= 200:
+                    truncated = True
+                    self.game_steps = 0
+                else:
+                    if tuple(self.position) not in self.visited_states:
+                        reward += 0.05
+                        self.visited_states.add(tuple(self.position))
+                    else:
+                        reward -= 0.07
+        else:
+            reward = -0.75
+            terminated = True
+            self.game_steps = 0
+        return self._get_state(), reward, terminated, truncated, info
+
+    def train_value_agent(self, episodes, render):
+        print(f'Info: Agent Training has been started over the Maze Simulation...')
+        print(f'-' * 147)
+        self.model_filename = (self.model_name + '_' + str(self.env.maze_size) + 'x' + str(self.env.maze_size) + '_'
+                               + str(episodes) + '_ep' + f"epoch{self.epch}" + "_final.pt")
+
+        returns_per_episode = np.zeros(episodes)
+        epsilon_history = np.zeros(episodes)
+        steps_per_episode = np.zeros(episodes)
+        training_error = np.zeros(episodes)
+        unique_steps_per_episode = np.zeros(episodes)
+        success_paths = []
+
+        time_steps, saved_model = 0, False
+        for episode in range(episodes):
+            pth=[]
+            state = self.reset()
+            done, returns, step, success_status, loss = False, 0, 0, 0, 0.0
+            while True:
+                self.env.update_display(self) if render else None
+                time_steps += 1
+                pth.append(self.position.copy())
+
+                if time_steps % self.model.update_rate == 0:
+                    self.model.update_target_network()
+
+                action = self.model.act(state)
+                new_state, reward, terminated, truncated, info = self.step(action)
+
+                self.model.remember(state, action, reward, new_state, terminated)
+
+                state = new_state
+                returns += reward
+                step += 1
+                done = terminated or truncated
+
+                if info['Success']:
+                    self.save_model(is_policy_model=False)
+                    saved_model = True
+
+
+
+                if done:
+                    print(f"Episode {episode + 1}/{episodes} - Steps: {step}, Return: {returns:.2f}, Epsilon: "
+                          f"{self.model.epsilon:.3f}, Loss: {loss:0.4f}")
+                    self.total_steps.append(step)
+
+                    if(np.array_equal(self.position, self.env.destination)):
+                        self.success_episodes.append(episode)
+                        success_paths.append(pth)
+
+                    break
+
+                if len(self.model.replay_buffer.buffer) > self.batch_size:
+                    loss = self.model.train(self.batch_size)
+            self.model.epsilon = max(self.model.epsilon * self.model.epsilon_decay, self.model.epsilon_min)
+            unique_steps_per_episode[episode] = len(self.visited_states)
+            returns_per_episode[episode] = returns
+            epsilon_history[episode] = self.model.epsilon
+            steps_per_episode[episode] = step
+            training_error[episode] = loss
+
+
+        # storing the success paths and success episodes as json so later can be used to plot the heatmaps.
+        optimal_steps = max(1, len(self.env.path) - 1) if hasattr(self.env, "path") and self.env.path else None
+        if getattr(self.env, "path", None) is None:
+            self.env.find_path()
+        optimal_path = self.env.path or []
+        optimal_path_list = [[int(r), int(c)] for (r, c) in optimal_path]
+        save_payload = {
+            "model_name": self.model_name,
+            "maze_size": int(self.env.maze_size),
+            "source": self.env.source.tolist(),
+            "destination": self.env.destination.tolist(),
+            "train_episodes": int(episodes),
+            "optimal_steps": optimal_steps,
+            "success_episodes": list(map(int, self.success_episodes)),
+            # Convert (r, c) tuples to [r, c] lists for JSON
+            "success_paths": [[[int(r), int(c)] for (r, c) in path] for path in success_paths],
+            "optimal_path": optimal_path_list,
+        }
+
+        filename = f"{self.model_name}_paths_{self.env.maze_size}x{self.env.maze_size}_{episodes}_ep_epoch{self.epch}.json"
+        with open(os.path.join(self.model_save_path, filename), "w") as f:
+            json.dump(save_payload, f)
+        print(f"Info: Saved success paths and episodes to {filename}")
+
+        print(f'-' * 147)
+        if not saved_model:
+            self.save_model(is_policy_model=False)
+        print(f'-' * 147)
+        return [returns_per_episode, epsilon_history, training_error, steps_per_episode, self.success_episodes,unique_steps_per_episode,success_paths]
+
+    def test_value_agent(self, episodes, render):
+        print(f'Info: Testing of the Agent has been started over the Maze Simulation...')
+        print(f'Info: Source: {self.env.source} Destination: {self.env.destination}')
+        print(f'-' * 147)
+
+        success_rate = np.zeros(episodes)
+        if os.path.exists(self.model_save_path):
+            file_path = self.model_save_path + self.model_filename
+            if os.path.isfile(file_path):
+                self.model.main_network.load_state_dict(torch.load(file_path, weights_only=True))
+                print(f'Info: Saved model has been successfully loaded...')
+                print(f'-' * 147)
+            else:
+                print(f'Exception: Model file is not exists. Unable to load saved model weight!!')
+                exit(0)
+
+        else:
+            print(f'Exception: The Data directory is not exists. Unable to load saved model weight!!')
+            exit(0)
+        self.model.main_network.eval()
+
+        for episode in range(episodes):
+            state = self.reset()
+            done, returns, step, success_status = False, 0, 0, 0
+            while not done:
+                self.env.update_display(self) if render else None
+                with torch.no_grad():
+                    action = self.model.main_network(self.model.encode_state(state).to(self.device)).argmax().item()
+
+                new_state, reward, terminated, truncated, info = self.step(action)
+
+                state = new_state
+                step += 1
+                done = terminated or truncated
+                returns += reward
+
+                if info['Success']:
+                    success_status = 1
+            print(f'Episode {episode + 1}/{episodes} - Steps: {step}, Return: {returns:.2f}')
+            success_rate[episode] = success_status
+
+        print(f'-' * 147)
+        print(f'Info: Testing has been completed...')
+        return [None, None, None, None, success_rate]
+
+    def train_policy_agent(self, episodes, render):
+        pass
+
+    def test_policy_agent(self, episodes, render):
+        pass
+
+    def save_model(self, is_policy_model):
+        if is_policy_model:
+            torch.save(self.model.policy_network.state_dict(), self.model_save_path + self.model_filename)
+        else:
+            torch.save(self.model.main_network.state_dict(), self.model_save_path + self.model_filename)
+        print(f'Info: The model has been saved...')

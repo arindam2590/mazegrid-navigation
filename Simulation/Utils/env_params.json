@@ -1,0 +1,9 @@
+{
+    "SIZE": 30,
+    "CELL_SIZE": 40,
+    "RADIUS": 20,
+    "ACTION_SIZE": 4,
+    "FPS": 10,
+    "NUM_OBSTACLE": 0.2,
+    "GUIDED_MAZE": 0
+}

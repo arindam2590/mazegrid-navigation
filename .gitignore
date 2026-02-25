@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+._.DS_Store
+._*
+
+# Project-specific: generated data, models, outputs
+Data/
+output.txt
+
+# Jupyter
+.ipynb_checkpoints/
