@@ -95,6 +95,7 @@ class Simulation:
             if self.train_mode and not self.is_trained:
                 print(f'=' * 65 + ' Training Phase ' + '=' * 66)
                 self.train_start_time = time.time()
+                self.env.mode = 'TRAINING'
 
                 result = self.agent.train_value_agent(self.train_episodes, self.render)
 

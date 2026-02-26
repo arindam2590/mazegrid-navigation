@@ -41,6 +41,13 @@ class Agent:
         self.success_episodes = []
         self.total_steps = []
 
+        # Live display tracking (read by maze_env left panel)
+        self.current_episode   = 0
+        self.total_episodes    = 0
+        self.episode_reward    = 0.0
+        self.cumulative_reward = 0.0
+        self.goal_count        = 0
+
     def move(self, direction):
         self.position += direction
 
@@ -97,8 +104,11 @@ class Agent:
         unique_steps_per_episode = np.zeros(episodes)
         success_paths = []
 
+        self.total_episodes = episodes
         time_steps, saved_model = 0, False
         for episode in range(episodes):
+            self.current_episode = episode
+            self.episode_reward  = 0.0
             pth=[]
             state = self.reset()
             done, returns, step, success_status, loss = False, 0, 0, 0, 0.0
@@ -117,11 +127,14 @@ class Agent:
 
                 state = new_state
                 returns += reward
+                self.episode_reward    = returns
+                self.cumulative_reward += reward
                 step += 1
                 done = terminated or truncated
 
                 if info['Success']:
                     self.save_model(is_policy_model=False)
+                    self.goal_count += 1
                     saved_model = True
 
 

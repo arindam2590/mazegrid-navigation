@@ -7,5 +7,5 @@
     "LOCATION_FILENAME": "source_destination.npy",
     "EXCEL_FILENAME": "training_data_",
     "TEST_EPISODES": 50,
-    "epochs": 12
+    "epochs": 32
 }

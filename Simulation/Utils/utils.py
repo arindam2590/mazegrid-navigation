@@ -100,7 +100,7 @@ class DataVisualization:
                 df.to_excel(writer, sheet_name=self.model)
 
         else:
-            with pd.ExcelWriter(filepath, mode='a') as writer:
+            with pd.ExcelWriter(filepath, mode='a', if_sheet_exists='replace') as writer:
                 df.to_excel(writer, sheet_name=self.model)
 
     def plot_returns(self):
