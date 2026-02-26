@@ -7,7 +7,7 @@
     "LOCATION_FILENAME": "source_destination.npy",
     "EXCEL_FILENAME": "training_data_",
     "GUIDED_MAZE": 0,
-    "SIZE": 30,
+    "SIZE": 15,
     "CELL_SIZE": 40,
     "ACTION_SIZE": 4,
     "RADIUS": 20,

@@ -1,159 +1,210 @@
+"""
+Simulation orchestrator for the Deep RL-Based Maze Solver.
+
+Responsibilities:
+    - Load the correct pre-built maze from Simulation/grid_map/ based on
+      SIZE and DIFFICULTY from the parameter files.
+    - Initialise the environment, agent, and chosen value-based RL model.
+    - Run training (and optionally testing) phases.
+    - Manage the pygame window lifecycle.
+
+Public API (preserved):
+    run_simulation()        -- main entry point
+    game_initialize()       -- env / model / display setup
+    event_on_game_window()  -- pygame event loop
+    close_simulation()      -- teardown
+"""
+
 import json
 import os
 import time
-import pygame
+
 import numpy as np
+import pygame
+
 from .agent import Agent
 from .envs.maze_env import MazeEnv
-from .model.dqntorch import DQNModel,DoubleDQNModel,DuelingDQNModel
+from .model.dqntorch import DQNModel, DoubleDQNModel, DuelingDQNModel
 from .Utils.utils import DataVisualization
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+DIVIDER = '-' * 147
+HEADER  = '%' * 50 + ' Deep Reinforcement Learning Based MAZE Solver ' + '%' * 50
+
+# Maps CLI flag → (display name, model class)
+_MODEL_REGISTRY = {
+    'dqn':     ('DQN',         DQNModel),
+    'ddqn':    ('Double DQN',  DoubleDQNModel),
+    'dueldqn': ('Dueling DQN', DuelingDQNModel),
+}
 
 
 class Simulation:
-    def __init__(self, args, train_mode, train_episodes=100, render=False):
-        param_dir = 'Simulation/Utils/'
+    """Orchestrates the full RL maze simulation."""
 
-        # Load separate parameter files
-        with open(param_dir + 'env_params.json', 'r') as f:
-            self.env_params = json.load(f)
-        with open(param_dir + 'train_params.json', 'r') as f:
-            self.train_params = json.load(f)
-        with open(param_dir + 'sim_params.json', 'r') as f:
-            self.sim_params = json.load(f)
+    # -----------------------------------------------------------------------
+    # Construction
+    # -----------------------------------------------------------------------
+    def __init__(self, args, train_mode: bool,
+                 train_episodes: int = 100, render: bool = False):
 
-        # Merge all params for convenience (existing code uses self.params[...])
-        self.params = {**self.env_params, **self.train_params, **self.sim_params}
+        self.params = self._load_params()
+        print(f'\n{HEADER}')
 
-        print(f'\n' + '%' * 50 + ' Deep Reinforcement Learning Based MAZE Solver ' + '%' * 50)
-        self.data_dir = self.params['DATA_DIR'] + self.params['MAZE_DIR']
-        filename = self.params['MAZE_FILENAME']
-
-        if args.newmaze:
-            self.is_new_map = True
-            print(f'Info: Simulation has been started with New Map')
-            if not os.path.exists(self.data_dir):
-                os.makedirs(self.data_dir)
-        else:
-            self.is_new_map = False
-            print(f'Info: Simulation has been started with Old Map')
-            if not os.path.exists(self.data_dir):
-                print(f'Exception: Data directory does not exist. Unable to load saved maze!!')
-                exit(0)
-            else:
-                file_path = self.data_dir + filename
-                if not os.path.isfile(file_path):
-                    print(f'Exception: Maze file does not exist. Unable to load saved maze!!')
-                    exit(0)
-                file_path = self.data_dir + self.params['LOCATION_FILENAME']
-                if not os.path.isfile(file_path):
-                    print(f'Exception: Source/Destination file does not exist. Unable to load saved maze!!')
-                    exit(0)
-
-        self.env = MazeEnv()
-        self.agent = Agent(self.env)
-        self.n_obs = self.params['NUM_OBSTACLE']
-
-        if self.is_new_map:
-            self.env.generate_maze(self.n_obs)
-            np.save(self.data_dir + filename, self.env.maze)
-            self.env.generate_src_dst()
-        else:
-            self.env.maze = np.load(self.data_dir + filename)
-            self.env.load_src_dst()
-
-        self.train_mode = train_mode
-        self.is_trained = None
-        self.is_test_completed = False
-        self.render = render
-        self.train_episodes = train_episodes
-        self.test_episodes = self.params['TEST_EPISODES']
-
-        # Value-based model selection (DQN / Double DQN / Dueling DQN)
-        if args.dqn:
-            self.agent.model_name = 'DQN'
-        elif args.ddqn:
-            self.agent.model_name = 'Double DQN'
-        elif args.dueldqn:
-            self.agent.model_name = 'Dueling DQN'
-        else:
-            print(f'Exception: No value-based model specified. Use --dqn, --ddqn, or --dueldqn.')
+        # Resolve the value-based model from CLI flags
+        model_flag = next((k for k in _MODEL_REGISTRY if getattr(args, k, False)), None)
+        if model_flag is None:
+            print('Exception: No model specified. Use --dqn, --ddqn, or --dueldqn.')
             exit(0)
+        model_name, model_cls = _MODEL_REGISTRY[model_flag]
 
-        self.train_start_time = None
-        self.train_end_time = None
+        # Environment and agent
+        self.env   = MazeEnv()
+        self.agent = Agent(self.env)
+        self.agent.model_name = model_name
+        self._model_cls       = model_cls
+
+        # Load map: new (generated) or saved (from grid_map)
+        if getattr(args, 'newmaze', False):
+            print('Info: Simulation started with a newly generated maze')
+            self._load_generated_maze()
+        else:
+            size       = self.params['SIZE']
+            difficulty = self.params.get('DIFFICULTY', 'simple')
+            print(f'Info: Simulation started with saved map  '
+                  f'({size}x{size}, {difficulty})')
+            self._load_saved_maze(size, difficulty)
+
+        # Runtime flags
+        self.train_mode        = train_mode
+        self.train_episodes    = train_episodes
+        self.test_episodes     = self.params.get('TEST_EPISODES', 50)
+        self.render            = render
+        self.running           = True
+        self.is_trained        = None
+        self.is_test_completed = False
+        self._display_open     = False
+
+        # Timing
         self.sim_start_time = None
-        self.sim_end_time = None
-        self.is_env_initialized = False
-        self.running = True
 
+    # -----------------------------------------------------------------------
+    # Private helpers
+    # -----------------------------------------------------------------------
+    @staticmethod
+    def _load_params() -> dict:
+        """Read and merge all three parameter JSON files."""
+        param_dir = 'Simulation/Utils/'
+        params = {}
+        for cfg in ('env_params.json', 'train_params.json', 'sim_params.json'):
+            with open(param_dir + cfg) as f:
+                params.update(json.load(f))
+        return params
+
+    def _load_generated_maze(self):
+        """Generate a new random maze and persist it to Data/Maze/."""
+        data_dir = self.params['DATA_DIR'] + self.params['MAZE_DIR']
+        os.makedirs(data_dir, exist_ok=True)
+        self.env.generate_maze(self.params.get('NUM_OBSTACLE', 0.2))
+        np.save(data_dir + self.params['MAZE_FILENAME'], self.env.maze)
+        self.env.generate_src_dst()
+
+    def _load_saved_maze(self, size: int, difficulty: str):
+        """Load pre-built maze and src/dst from Simulation/grid_map/."""
+        grid_dir = self.params.get('GRID_MAP_DIR', 'Simulation/grid_map/')
+        prefix   = f'{size}x{size}_{difficulty}'
+        maze_path = os.path.join(grid_dir, f'{prefix}_maze.npy')
+        loc_path  = os.path.join(grid_dir, f'{prefix}_src_dst.npy')
+
+        for path, label in ((maze_path, 'Maze map'), (loc_path, 'Source/Destination')):
+            if not os.path.isfile(path):
+                print(f'Exception: {label} file not found → {path}')
+                exit(0)
+
+        self.env.maze = np.load(maze_path)
+        location = np.load(loc_path)
+        self.env.source, self.env.destination = location[0], location[1]
+
+    def _init_model(self):
+        """Instantiate the chosen RL model and attach it to the agent."""
+        self.agent.model = self._model_cls(
+            self.agent.state_size,
+            self.agent.action_size,
+            self.env,
+            self.agent.device,
+        )
+        print(f'Info: Model Selected  : {self.agent.model_name}')
+        print(f'Info: {self.agent.model_name} model ready for '
+              f'{"Training" if self.train_mode else "Testing"}')
+
+    def _save_and_plot(self, result):
+        """Persist training results to Excel and generate plots."""
+        vis = DataVisualization(
+            self.train_episodes, result, self.agent.model_name, 'VALUE'
+        )
+        vis.save_data()
+        vis.plot_returns()
+        vis.plot_episode_length()
+        vis.plot_training_error()
+        vis.plot_epsilon_decay()
+
+    # -----------------------------------------------------------------------
+    # Public API
+    # -----------------------------------------------------------------------
     def run_simulation(self):
+        """Main simulation entry point — initialise, train, (test), then close."""
         self.game_initialize()
         self.sim_start_time = time.time()
 
         while self.running:
             self.event_on_game_window() if self.render else None
+
+            # --- Training phase ---
             if self.train_mode and not self.is_trained:
-                print(f'=' * 65 + ' Training Phase ' + '=' * 66)
-                self.train_start_time = time.time()
+                print('=' * 65 + ' Training Phase ' + '=' * 66)
                 self.env.mode = 'TRAINING'
 
+                t0     = time.time()
                 result = self.agent.train_value_agent(self.train_episodes, self.render)
+                self._save_and_plot(result)
 
-                train_data_visual = DataVisualization(self.train_episodes, result,
-                                                      self.agent.model_name, 'VALUE')
-
-                train_data_visual.save_data()
-                train_data_visual.plot_returns()
-                train_data_visual.plot_episode_length()
-                train_data_visual.plot_training_error()
-                train_data_visual.plot_epsilon_decay()
-
-                self.train_end_time = time.time()
-                elapsed_time = self.train_end_time - self.train_start_time
-                print(f'Info: Training has been completed...')
-                print(f'Info: Total Completion Time: {elapsed_time:.2f} seconds')
-                print(f'-' * 147)
+                elapsed = time.time() - t0
+                print(f'Info: Training completed in {elapsed:.2f} s')
+                print(DIVIDER)
                 self.is_trained = True
 
+            # --- Testing phase (placeholder — extend here) ---
             if (self.is_trained or not self.train_mode) and not self.is_test_completed:
-                break
+                break   # exit loop; testing logic to be added here
 
     def game_initialize(self):
+        """Set up agent position, A* path, pygame display, and RL model."""
         self.agent.position = np.array(self.env.source)
         self.env.find_path()
 
         if self.render:
             self.env.env_setup()
+            self._display_open = True
 
-        if self.train_mode:
-            self.is_trained = False
-        else:
-            self.is_trained = True
+        self.is_trained = False if self.train_mode else True
 
-        self.is_env_initialized = True
-        print(f'Info: Source: {self.env.source} Destination: {self.env.destination}')
-        print(f'-' * 147)
-        # return len(self.env.find_path())
+        print(f'Info: Source      : {self.env.source}')
+        print(f'Info: Destination : {self.env.destination}')
+        print(DIVIDER)
 
-        if self.agent.model_name == 'DQN':
-            print(f'Info: Model Selected: {self.agent.model_name}')
-            self.agent.model = DQNModel(self.agent.state_size, self.agent.action_size, self.env, self.agent.device)
-            print(f'Info: DQN Model is assigned for the Training and Testing of Agent...')
-        elif self.agent.model_name == 'Double DQN':
-            print(f'Info: Model Selected: {self.agent.model_name}')
-            self.agent.model = DoubleDQNModel(self.agent.state_size, self.agent.action_size, self.env, self.agent.device)
-            print(f'Info: DoubleDQ Model is assigned for the Training and Testing of Agent...')
-        elif self.agent.model_name == 'Dueling DQN':
-            print(f'Info: Model Selected: {self.agent.model_name}')
-            self.agent.model = DuelingDQNModel(self.agent.state_size, self.agent.action_size, self.env, self.agent.device)
-            print(f'Info: DuelingDQN Model is assigned for the Training and Testing of Agent...')
-
+        self._init_model()
+        print(DIVIDER)
 
     def event_on_game_window(self):
+        """Process pygame window events (e.g. close button)."""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
 
     def close_simulation(self):
-        pygame.quit() if self.render else None
-
+        """Tear down pygame display if it is open."""
+        if self._display_open:
+            pygame.quit()
+            self._display_open = False
