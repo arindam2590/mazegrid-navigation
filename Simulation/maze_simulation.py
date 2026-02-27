@@ -48,7 +48,8 @@ class Simulation:
     # Construction
     # -----------------------------------------------------------------------
     def __init__(self, args, train_mode: bool,
-                 train_episodes: int = 100, render: bool = False):
+                 train_episodes: int = 100, render: bool = False,
+                 trial: int = 1):
 
         self.params = self._load_params()
         print(f'\n{HEADER}')
@@ -86,6 +87,9 @@ class Simulation:
         self.is_trained        = None
         self.is_test_completed = False
         self._display_open     = False
+
+        # Trial number (1 → NUM_RUNS) passed from main — used for display & filenames
+        self.agent.epch        = trial
 
         # Timing
         self.sim_start_time = None
@@ -142,7 +146,8 @@ class Simulation:
     def _save_and_plot(self, result):
         """Persist training results to Excel and generate plots."""
         vis = DataVisualization(
-            self.train_episodes, result, self.agent.model_name, 'VALUE'
+            self.train_episodes, result, self.agent.model_name, 'VALUE',
+            trial=self.agent.epch          # ← pass trial number so each run → own sheet
         )
         vis.save_data()
         vis.plot_returns()

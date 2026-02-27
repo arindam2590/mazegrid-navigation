@@ -2,12 +2,11 @@
     "DATA_DIR": "Data/",
     "MAZE_DIR": "Maze/",
     "GRID_MAP_DIR": "Simulation/grid_map/",
-    "DIFFICULTY": "simple",
+    "DIFFICULTY": "complex",
     "FIG_DIR": "Figures/",
     "MAZE_MODEL_DIR": "Model/",
     "MAZE_FILENAME": "maze_grid.npy",
     "LOCATION_FILENAME": "source_destination.npy",
     "EXCEL_FILENAME": "training_data_",
-    "TEST_EPISODES": 50,
-    "epochs": 57
+    "TEST_EPISODES": 50
 }

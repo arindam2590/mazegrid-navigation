@@ -18,7 +18,7 @@ from Simulation.maze_simulation import Simulation
 # Configuration
 # ---------------------------------------------------------------------------
 NUM_RUNS = 5
-TRAIN_EPISODES = 20
+TRAIN_EPISODES = 200
 TRAIN_MODE = True
 RENDER = True
 PARAM_DIR = Path('Simulation/Utils')
@@ -31,14 +31,10 @@ def main(args):
     with open(sim_config_path, 'r') as f:
         sim_params = json.load(f)
 
-    for _ in range(NUM_RUNS):
-        sim = Simulation(args, TRAIN_MODE, TRAIN_EPISODES, RENDER)
+    for trial in range(1, NUM_RUNS + 1):
+        sim = Simulation(args, TRAIN_MODE, TRAIN_EPISODES, RENDER, trial=trial)
         sim.run_simulation()
         sim.close_simulation()
-
-        sim_params['epochs'] = sim_params.get('epochs', 0) + 1
-        with open(sim_config_path, 'w') as f:
-            json.dump(sim_params, f, indent=4)
 
 
 if __name__ == '__main__':

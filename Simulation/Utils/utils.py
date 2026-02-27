@@ -34,10 +34,13 @@ def setup_parser():
 
 
 class DataVisualization:
-    def __init__(self, episodes, result, model, model_type):
+    def __init__(self, episodes, result, model, model_type, trial: int = 1):
         param_dir = 'Simulation/Utils/'
-        with open(param_dir + 'config.json', 'r') as file:
-            self.params = json.load(file)
+        params = {}
+        for cfg in ('env_params.json', 'train_params.json', 'sim_params.json'):
+            with open(param_dir + cfg) as f:
+                params.update(json.load(f))
+        self.params = params
 
         self.model = model
         self.model_type = model_type
@@ -53,19 +56,32 @@ class DataVisualization:
         # index of all the episodes which got success
         self.success_episodes = result[4]
         self.unique_steps = result[5]
-        self.sz = self.params["SIZE"]
+        self.sz   = self.params['SIZE']
+        self.epch = trial
+
+        # Load the same maze that the simulation used
+        grid_dir        = self.params.get('GRID_MAP_DIR', 'Simulation/grid_map/')
+        difficulty      = self.params.get('DIFFICULTY', 'simple')
+        self.difficulty = difficulty          # stored for filename
+        prefix          = f"{self.sz}x{self.sz}_{difficulty}"
+        maze_path  = os.path.join(grid_dir, f'{prefix}_maze.npy')
+        loc_path   = os.path.join(grid_dir, f'{prefix}_src_dst.npy')
 
         self.env = MazeEnv()
-        self.data_dir = self.params['DATA_DIR'] + self.params['MAZE_DIR']
-        filename = self.params['MAZE_FILENAME']
-        self.env.maze = np.load(self.data_dir + filename)
-        self.env.load_src_dst()
+        self.env.maze = np.load(maze_path)
+        location = np.load(loc_path)
+        self.env.source, self.env.destination = location[0], location[1]
         self.env.find_path()
-        self.optimal_path_length = len(self.env.path)-1
-        self.epch = self.params["epochs"]
+        self.optimal_path_length = len(self.env.path) - 1
 
     def save_data(self):
-        filepath = self.fig_dir + self.data_filename+ self.model + '_'+f"{self.sz}" + '_'+f"epoch{self.epch}" +".xlsx"
+        # Filename: e.g.  DQN_200_episode_60x60_simple.xlsx
+        # Each trial is a separate sheet:  Trial_1, Trial_2, …
+        fname    = (f"{self.model}_{self.n_episodes}_episode_"
+                    f"{self.sz}x{self.sz}_{self.difficulty}.xlsx")
+        filepath   = self.fig_dir + fname
+        sheet_name = f"Trial_{self.epch}"
+
         if self.model_type == 'VALUE':
             df = pd.DataFrame({'Rewards': self.returns,
                                'Steps': self.steps,
@@ -73,20 +89,14 @@ class DataVisualization:
                                'Training Error': self.training_error,
                                'Success Rate': (len(self.success_episodes)/self.n_episodes)*100,})
 
-            df["Path Efficiency"] = 0
-            df["RGEE"] = 0
+            df["Path Efficiency"] = 0.0   # float dtype avoids incompatible-dtype warning
+            df["RGEE"] = 0.0
             for ep in range(self.n_episodes):
-                # path efficiency len of optimal path / len of path taken by agent
-                if ep in self.success_episodes:
-                    df["Path Efficiency"].iloc[ep] = self.optimal_path_length/self.steps[ep]
-                else :
-                    df["Path Efficiency"].iloc[ep] = self.optimal_path_length/self.steps[ep]
+                # path efficiency: len of optimal path / len of path taken by agent
+                df.loc[ep, "Path Efficiency"] = self.optimal_path_length / self.steps[ep]
 
-                # rgee(reasoning guided explortion)  (unique states visited / total states visited)
-
-                df["RGEE"].iloc[ep] = self.unique_steps[ep]/self.steps[ep]
-
-
+                # RGEE (reasoning guided exploration): unique states visited / total states visited
+                df.loc[ep, "RGEE"] = self.unique_steps[ep] / self.steps[ep]
 
         else:
             df = pd.DataFrame({'Rewards': self.returns,
@@ -96,12 +106,13 @@ class DataVisualization:
                                })
 
         if not os.path.isfile(filepath):
+            # First trial — create workbook fresh
             with pd.ExcelWriter(filepath, mode='w') as writer:
-                df.to_excel(writer, sheet_name=self.model)
-
+                df.to_excel(writer, sheet_name=sheet_name)
         else:
+            # File exists — add / replace only this trial's sheet; keep all others
             with pd.ExcelWriter(filepath, mode='a', if_sheet_exists='replace') as writer:
-                df.to_excel(writer, sheet_name=self.model)
+                df.to_excel(writer, sheet_name=sheet_name)
 
     def plot_returns(self):
         plot_filename = self.fig_dir + 'MazeGrid_' + self.model + '_cumm_training_returns.png'

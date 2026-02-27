@@ -75,7 +75,7 @@ class ValueNetwork(nn.Module):
 class REINFORCE:
     def __init__(self, state_size, action_size, maze, device):
         param_dir = 'Simulation/Utils/'
-        with open(param_dir + 'config.json', 'r') as file:
+        with open(param_dir + 'train_params.json', 'r') as file:
             self.params = json.load(file)
 
         self.state_size = state_size

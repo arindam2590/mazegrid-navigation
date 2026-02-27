@@ -7,8 +7,11 @@ import numpy as np
 class Agent:
     def __init__(self, env):
         param_dir = 'Simulation/Utils/'
-        with open(param_dir + 'config.json', 'r') as file:
-            self.params = json.load(file)
+        params = {}
+        for cfg in ('env_params.json', 'train_params.json', 'sim_params.json'):
+            with open(param_dir + cfg) as f:
+                params.update(json.load(f))
+        self.params = params
 
         self.model_save_path = self.params['DATA_DIR'] + self.params['MAZE_MODEL_DIR']
         if not os.path.exists(self.model_save_path):
@@ -24,7 +27,7 @@ class Agent:
         self.batch_size = self.params['BATCH_SIZE']
         self.model_filename = None
         self.game_steps = 0
-        self.epch = self.params["epochs"]
+        self.epch = 1   # set to the current trial number by Simulation
 
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -47,6 +50,14 @@ class Agent:
         self.episode_reward    = 0.0
         self.cumulative_reward = 0.0
         self.goal_count        = 0
+
+        # Per-episode history lists — read by maze_env right panel for live sparklines
+        self.live_rewards   = []   # episode return
+        self.live_epsilons  = []   # epsilon after each episode
+        self.live_steps     = []   # steps taken per episode
+        self.live_errors    = []   # TD / training loss per episode
+        self.live_path_eff  = []   # path efficiency (optimal / steps), 0 if failed
+        self._optimal_path_len = 0  # set once path is known
 
     def move(self, direction):
         self.position += direction
@@ -94,8 +105,14 @@ class Agent:
     def train_value_agent(self, episodes, render):
         print(f'Info: Agent Training has been started over the Maze Simulation...')
         print(f'-' * 147)
-        self.model_filename = (self.model_name + '_' + str(self.env.maze_size) + 'x' + str(self.env.maze_size) + '_'
-                               + str(episodes) + '_ep' + f"epoch{self.epch}" + "_final.pt")
+
+        # Filename mirrors the Excel naming: DQN_200_episode_60x60_simple_Trial_1_best.pt
+        sz         = self.env.maze_size
+        difficulty = self.params.get('DIFFICULTY', 'simple')
+        self.model_filename = (
+            f"{self.model_name}_{episodes}_episode_"
+            f"{sz}x{sz}_{difficulty}_Trial_{self.epch}_best.pt"
+        )
 
         returns_per_episode = np.zeros(episodes)
         epsilon_history = np.zeros(episodes)
@@ -105,7 +122,8 @@ class Agent:
         success_paths = []
 
         self.total_episodes = episodes
-        time_steps, saved_model = 0, False
+        best_reward = float('-inf')   # track best episode return seen so far
+        time_steps  = 0
         for episode in range(episodes):
             self.current_episode = episode
             self.episode_reward  = 0.0
@@ -133,20 +151,21 @@ class Agent:
                 done = terminated or truncated
 
                 if info['Success']:
-                    self.save_model(is_policy_model=False)
                     self.goal_count += 1
-                    saved_model = True
-
-
 
                 if done:
                     print(f"Episode {episode + 1}/{episodes} - Steps: {step}, Return: {returns:.2f}, Epsilon: "
                           f"{self.model.epsilon:.3f}, Loss: {loss:0.4f}")
                     self.total_steps.append(step)
 
-                    if(np.array_equal(self.position, self.env.destination)):
+                    if np.array_equal(self.position, self.env.destination):
                         self.success_episodes.append(episode)
                         success_paths.append(pth)
+                        # Save only when this successful episode beats the best so far
+                        if returns > best_reward:
+                            best_reward = returns
+                            self.save_model(is_policy_model=False)
+                            print(f'Info: New best model saved  (reward={best_reward:.3f})')
 
                     break
 
@@ -159,11 +178,19 @@ class Agent:
             steps_per_episode[episode] = step
             training_error[episode] = loss
 
+            # Update live sparkline histories (read by right panel each frame)
+            opt = len(self.env.path) - 1 if (getattr(self.env, 'path', None)) else 1
+            self._optimal_path_len = max(1, opt)
+            pe = self._optimal_path_len / max(1, step) if episode in self.success_episodes else 0.0
+            self.live_rewards.append(float(returns))
+            self.live_epsilons.append(float(self.model.epsilon))
+            self.live_steps.append(float(step))
+            self.live_errors.append(float(loss))
+            self.live_path_eff.append(float(pe))
+
 
         # storing the success paths and success episodes as json so later can be used to plot the heatmaps.
         optimal_steps = max(1, len(self.env.path) - 1) if hasattr(self.env, "path") and self.env.path else None
-        if getattr(self.env, "path", None) is None:
-            self.env.find_path()
         optimal_path = self.env.path or []
         optimal_path_list = [[int(r), int(c)] for (r, c) in optimal_path]
         save_payload = {
@@ -179,14 +206,16 @@ class Agent:
             "optimal_path": optimal_path_list,
         }
 
-        filename = f"{self.model_name}_paths_{self.env.maze_size}x{self.env.maze_size}_{episodes}_ep_epoch{self.epch}.json"
+        filename = f"{self.model_name}_paths_{self.env.maze_size}x{self.env.maze_size}_{difficulty}_{episodes}_ep_trial_{self.epch}.json"
         with open(os.path.join(self.model_save_path, filename), "w") as f:
             json.dump(save_payload, f)
         print(f"Info: Saved success paths and episodes to {filename}")
 
         print(f'-' * 147)
-        if not saved_model:
+        if best_reward == float('-inf'):
+            # No success in the entire run — save final weights so testing still works
             self.save_model(is_policy_model=False)
+            print('Info: No successful episode — saved final weights as fallback.')
         print(f'-' * 147)
         return [returns_per_episode, epsilon_history, training_error, steps_per_episode, self.success_episodes,unique_steps_per_episode,success_paths]
 

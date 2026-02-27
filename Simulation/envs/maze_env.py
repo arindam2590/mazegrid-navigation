@@ -65,6 +65,7 @@ class MazeEnv:
 
         self.data_dir   = self.params['DATA_DIR'] + self.params['MAZE_DIR']
         self.maze_size  = self.params['SIZE']
+        self.difficulty = self.params.get('DIFFICULTY', 'simple')  # stored for left panel
 
         # cell_size / map_px computed after pygame init in env_setup
         self.cell_size  = self.params['CELL_SIZE']
@@ -108,9 +109,9 @@ class MazeEnv:
         scr_w = info.current_w  if info.current_w  > 100 else 1920
         scr_h = info.current_h  if info.current_h  > 100 else 1080
 
-        # Window = 75 % of screen
-        win_w = int(scr_w * 0.75)
-        win_h = int(scr_h * 0.75)
+        # Window = 90 % of screen for better map visibility
+        win_w = int(scr_w * 0.90)
+        win_h = int(scr_h * 0.90)
 
         # Largest square map that fits in the remaining area
         avail_w = win_w - LEFT_W - RIGHT_W
@@ -118,14 +119,17 @@ class MazeEnv:
         map_px  = min(avail_w, avail_h)
         cell_sz = max(1, map_px // self.maze_size)
 
+        # Recompute actual map pixel size based on whole cells
+        actual_map_px = cell_sz * self.maze_size
+
         self.cell_size   = cell_sz
-        self.map_px      = cell_sz * self.maze_size
-        self.window_size = (LEFT_W + self.map_px + RIGHT_W,
-                            TOP_H  + self.map_px)
+        self.map_px      = actual_map_px
+        self.window_size = (LEFT_W + actual_map_px + RIGHT_W,
+                            TOP_H  + actual_map_px)
 
         # Centre window on primary screen
-        x = (scr_w - self.window_size[0]) // 2
-        y = (scr_h - self.window_size[1]) // 2
+        x = max(0, (scr_w - self.window_size[0]) // 2)
+        y = max(0, (scr_h - self.window_size[1]) // 2)
         os.environ['SDL_VIDEO_WINDOW_POS'] = f'{x},{y}'
 
         self.screen = pygame.display.set_mode(self.window_size)
@@ -133,11 +137,11 @@ class MazeEnv:
         self.clock      = pygame.time.Clock()
         self.start_time = time.time()
 
-        self._font_title = pygame.font.SysFont('Segoe UI', 26, bold=True)
-        self._font_mode  = pygame.font.SysFont('Segoe UI', 13, bold=True)
-        self._font_lg    = pygame.font.SysFont('Segoe UI', 17, bold=True)
-        self._font_md    = pygame.font.SysFont('Segoe UI', 14)
-        self._font_sm    = pygame.font.SysFont('Segoe UI', 12)
+        self._font_title = pygame.font.SysFont('Segoe UI', 28, bold=True)
+        self._font_mode  = pygame.font.SysFont('Segoe UI', 15, bold=True)
+        self._font_lg    = pygame.font.SysFont('Segoe UI', 20, bold=True)
+        self._font_md    = pygame.font.SysFont('Segoe UI', 17)
+        self._font_sm    = pygame.font.SysFont('Segoe UI', 15)
 
     # -----------------------------------------------------------------------
     # Environment helpers (unchanged)
@@ -255,7 +259,7 @@ class MazeEnv:
         self.screen.fill(C_BG)
         self._draw_top_bar()
         self._draw_left_panel(agent)
-        self._draw_right_panel()
+        self._draw_right_panel(agent)
         self._draw_maze()
         self._draw_agent(agent)
         pygame.display.update()
@@ -299,25 +303,27 @@ class MazeEnv:
                          (LEFT_W - 1, TOP_H), (LEFT_W - 1, TOP_H + self.map_px), 2)
 
         # Panel title strip with background
-        title_strip = pygame.Rect(0, TOP_H, LEFT_W, 36)
+        title_strip = pygame.Rect(0, TOP_H, LEFT_W, 40)
         pygame.draw.rect(self.screen, (38, 44, 66), title_strip)
         title = self._font_lg.render('  Parameters', True, C_TITLE)
         self.screen.blit(title, (8, TOP_H + 8))
         pygame.draw.line(self.screen, C_PANEL_EDGE,
-                         (0, TOP_H + 36), (LEFT_W, TOP_H + 36), 1)
+                         (0, TOP_H + 40), (LEFT_W, TOP_H + 40), 1)
 
         # Gather values
-        eps_val   = f'{agent.model.epsilon:.4f}' if (agent.model and hasattr(agent.model, 'epsilon')) else 'N/A'
-        ep_curr   = getattr(agent, 'current_episode', 0) + 1
-        ep_total  = getattr(agent, 'total_episodes', '?')
-        step_val  = agent.game_steps
-        ep_reward = getattr(agent, 'episode_reward', 0.0)
-        cum_rew   = getattr(agent, 'cumulative_reward', 0.0)
-        goal_cnt  = getattr(agent, 'goal_count', 0)
+        eps_val    = f'{agent.model.epsilon:.4f}' if (agent.model and hasattr(agent.model, 'epsilon')) else 'N/A'
+        ep_curr    = getattr(agent, 'current_episode', 0) + 1
+        ep_total   = getattr(agent, 'total_episodes', '?')
+        step_val   = agent.game_steps
+        ep_reward  = getattr(agent, 'episode_reward', 0.0)
+        cum_rew    = getattr(agent, 'cumulative_reward', 0.0)
+        goal_cnt   = getattr(agent, 'goal_count', 0)
+        difficulty = getattr(self, 'difficulty', self.params.get('DIFFICULTY', 'simple'))
 
         rows = [
             ('Model',       str(agent.model_name or 'N/A')),
             ('Grid',        f'{self.maze_size} x {self.maze_size}'),
+            ('Difficulty',  str(difficulty).capitalize()),
             ('Run (Trial)', str(getattr(agent, 'epch', '?'))),
             ('',            ''),
             ('Episode',     f'{ep_curr} / {ep_total}'),
@@ -332,40 +338,111 @@ class MazeEnv:
             ('Batch Size',  str(self.train_params.get('BATCH_SIZE', '?'))),
         ]
 
-        y = TOP_H + 46
+        # White label color, larger row spacing to match bigger fonts
+        C_LABEL_WHITE = (255, 255, 255)
+        y = TOP_H + 50
         for label, value in rows:
             if label == '':
-                y += 6
+                y += 8
                 continue
-            lbl_s = self._font_sm.render(label, True, C_LABEL)
+            lbl_s = self._font_sm.render(label, True, C_LABEL_WHITE)
             val_s = self._font_md.render(value, True, C_VALUE)
             self.screen.blit(lbl_s, (12, y))
             # Right-align value
             vx = LEFT_W - val_s.get_width() - 12
             self.screen.blit(val_s, (vx, y - 1))
-            y += 22
+            y += 26
 
     # --- Right panel -------------------------------------------------------
-    def _draw_right_panel(self):
+    def _draw_sparkline(self, data, rect, colour, label, screen):
+        """Draw a single sparkline chart into rect (pygame.Rect).
+        Shows label, current value, and a polyline of the data points.
+        """
+        x0, y0, w, h = rect.x, rect.y, rect.width, rect.height
+
+        # Chart background
+        pygame.draw.rect(screen, (22, 26, 42), rect)
+        pygame.draw.rect(screen, C_PANEL_EDGE, rect, 1)
+
+        # Label (top-left)
+        lbl = self._font_sm.render(label, True, (255, 255, 255))
+        screen.blit(lbl, (x0 + 4, y0 + 3))
+
+        if not data:
+            wait = self._font_sm.render('waiting…', True, C_LABEL)
+            screen.blit(wait, (x0 + w // 2 - wait.get_width() // 2,
+                               y0 + h // 2 - wait.get_height() // 2))
+            return
+
+        # Current value (top-right)
+        cur_txt = self._font_sm.render(f'{data[-1]:.3f}', True, colour)
+        screen.blit(cur_txt, (x0 + w - cur_txt.get_width() - 4, y0 + 3))
+
+        # Plot area margins
+        px0  = x0 + 4
+        py0  = y0 + 18        # below label row
+        pw   = w - 8
+        ph   = h - 24
+        if pw < 4 or ph < 4:
+            return
+
+        mn, mx = min(data), max(data)
+        span = mx - mn if mx != mn else 1.0
+
+        # Zero baseline (if data crosses zero)
+        if mn < 0 < mx:
+            zero_y = int(py0 + ph - ((0 - mn) / span) * ph)
+            pygame.draw.line(screen, (80, 80, 100), (px0, zero_y), (px0 + pw, zero_y), 1)
+
+        # Polyline
+        n = len(data)
+        pts = []
+        for i, v in enumerate(data):
+            px = px0 + int(i / max(n - 1, 1) * pw)
+            py = py0 + int((1.0 - (v - mn) / span) * (ph - 1))
+            pts.append((px, py))
+
+        if len(pts) >= 2:
+            pygame.draw.lines(screen, colour, False, pts, 2)
+
+        # Dot on latest point
+        pygame.draw.circle(screen, colour, pts[-1], 3)
+
+    def _draw_right_panel(self, agent):
         rx = LEFT_W + self.map_px
         panel = pygame.Rect(rx, TOP_H, RIGHT_W, self.map_px)
         pygame.draw.rect(self.screen, C_PANEL_BG, panel)
         pygame.draw.line(self.screen, C_PANEL_EDGE,
                          (rx, TOP_H), (rx, TOP_H + self.map_px), 2)
 
-        # Panel title strip with background
-        title_strip = pygame.Rect(rx, TOP_H, RIGHT_W, 36)
+        # Panel title strip
+        title_strip = pygame.Rect(rx, TOP_H, RIGHT_W, 40)
         pygame.draw.rect(self.screen, (38, 44, 66), title_strip)
         title = self._font_lg.render('  Performance', True, C_TITLE)
         self.screen.blit(title, (rx + 8, TOP_H + 8))
         pygame.draw.line(self.screen, C_PANEL_EDGE,
-                         (rx, TOP_H + 36), (rx + RIGHT_W, TOP_H + 36), 1)
+                         (rx, TOP_H + 40), (rx + RIGHT_W, TOP_H + 40), 1)
 
-        # Placeholder
-        ph = self._font_sm.render('Plot area', True, C_LABEL)
-        self.screen.blit(ph,
-                         (rx + RIGHT_W // 2 - ph.get_width() // 2,
-                          TOP_H + self.map_px // 2))
+        # --- 5 sparkline charts ---
+        # Available height below the title strip
+        avail_h = self.map_px - 40
+        chart_margin = 6
+        n_charts = 5
+        chart_h = (avail_h - chart_margin * (n_charts + 1)) // n_charts
+        chart_w = RIGHT_W - chart_margin * 2
+
+        charts = [
+            (getattr(agent, 'live_rewards',  []), (80,  200, 120), 'Reward'),
+            (getattr(agent, 'live_epsilons', []), (80,  160, 255), 'Epsilon Decay'),
+            (getattr(agent, 'live_steps',    []), (255, 165,  60), 'Steps / Episode'),
+            (getattr(agent, 'live_errors',   []), (255,  80, 100), 'TD Error'),
+            (getattr(agent, 'live_path_eff', []), (180, 130, 255), 'Path Efficiency'),
+        ]
+
+        for idx, (data, colour, label) in enumerate(charts):
+            cy = TOP_H + 40 + chart_margin + idx * (chart_h + chart_margin)
+            rect = pygame.Rect(rx + chart_margin, cy, chart_w, chart_h)
+            self._draw_sparkline(data, rect, colour, label, self.screen)
 
     # --- Maze grid ---------------------------------------------------------
     def _draw_maze(self):
