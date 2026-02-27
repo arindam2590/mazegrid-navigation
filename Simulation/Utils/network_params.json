@@ -1,0 +1,170 @@
+{
+    "_comment": "Network architecture presets keyed by '{size}_{difficulty}'. Edit layer lists freely.",
+    "_comment2": "'shared' = trunk layers before value/advantage split (DuelingDQN only). 'hidden' = all layers for DQN/DoubleDQN.",
+    "NETWORK_ARCH": {
+        "15_simple": {
+            "hidden": [
+                128,
+                64
+            ],
+            "shared": [
+                128,
+                64
+            ],
+            "value": [
+                64
+            ],
+            "advantage": [
+                64
+            ]
+        },
+        "15_moderate": {
+            "hidden": [
+                128,
+                64
+            ],
+            "shared": [
+                128,
+                64
+            ],
+            "value": [
+                64
+            ],
+            "advantage": [
+                64
+            ]
+        },
+        "15_complex": {
+            "hidden": [
+                256,
+                128
+            ],
+            "shared": [
+                256,
+                128
+            ],
+            "value": [
+                64
+            ],
+            "advantage": [
+                64
+            ]
+        },
+        "30_simple": {
+            "hidden": [
+                256,
+                128
+            ],
+            "shared": [
+                256,
+                128
+            ],
+            "value": [
+                64
+            ],
+            "advantage": [
+                64
+            ]
+        },
+        "30_moderate": {
+            "hidden": [
+                256,
+                128
+            ],
+            "shared": [
+                256,
+                128
+            ],
+            "value": [
+                128
+            ],
+            "advantage": [
+                128
+            ]
+        },
+        "30_complex": {
+            "hidden": [
+                512,
+                256
+            ],
+            "shared": [
+                512,
+                256
+            ],
+            "value": [
+                128
+            ],
+            "advantage": [
+                128
+            ]
+        },
+        "60_simple": {
+            "hidden": [
+                512,
+                256
+            ],
+            "shared": [
+                512,
+                256
+            ],
+            "value": [
+                128
+            ],
+            "advantage": [
+                128
+            ]
+        },
+        "60_moderate": {
+            "hidden": [
+                512,
+                256,
+                128
+            ],
+            "shared": [
+                512,
+                256,
+                128
+            ],
+            "value": [
+                128
+            ],
+            "advantage": [
+                128
+            ]
+        },
+        "60_complex": {
+            "hidden": [
+                512,
+                256,
+                128
+            ],
+            "shared": [
+                512,
+                256,
+                128
+            ],
+            "value": [
+                256
+            ],
+            "advantage": [
+                256
+            ]
+        },
+        "default": {
+            "hidden": [
+                256,
+                128
+            ],
+            "shared": [
+                256,
+                128
+            ],
+            "value": [
+                64
+            ],
+            "advantage": [
+                64
+            ]
+        }
+    }
+}
