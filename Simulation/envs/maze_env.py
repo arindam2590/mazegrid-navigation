@@ -88,8 +88,9 @@ class MazeEnv:
         self.waypoints   = [] if self.is_guided_maze else None
 
         # Mode set externally by Simulation before rendering
-        self.mode       = 'TRAINING'
-        self.start_time = None
+        self.mode           = 'TRAINING'
+        self.start_time     = None
+        self.quit_requested = False   # set to True when user closes the window
 
         # Pygame font handles (set in env_setup)
         self._font_lg  = None
@@ -265,6 +266,12 @@ class MazeEnv:
         pygame.display.update()
         self.clock.tick(self.fps)
 
+        # Process OS events every frame so the window stays responsive during
+        # training/testing inner loops (prevents freeze on drag/close).
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.quit_requested = True
+
     # --- Top bar -----------------------------------------------------------
     def _draw_top_bar(self):
         bar_rect = pygame.Rect(0, 0, self.window_size[0], TOP_H)
@@ -415,32 +422,42 @@ class MazeEnv:
         pygame.draw.line(self.screen, C_PANEL_EDGE,
                          (rx, TOP_H), (rx, TOP_H + self.map_px), 2)
 
-        # Panel title strip
+        # ── Panel title strip (colour differs by mode) ──────────────────────
+        is_testing    = (self.mode == 'TESTING')
+        strip_colour  = (38, 44, 66) if is_testing else (20, 60, 70)   # testing=dark blue, training=teal
+        title_label   = '  Test Results' if is_testing else '  Performance'
+
         title_strip = pygame.Rect(rx, TOP_H, RIGHT_W, 40)
-        pygame.draw.rect(self.screen, (38, 44, 66), title_strip)
-        title = self._font_lg.render('  Performance', True, C_TITLE)
+        pygame.draw.rect(self.screen, strip_colour, title_strip)
+        title = self._font_lg.render(title_label, True, C_TITLE)
         self.screen.blit(title, (rx + 8, TOP_H + 8))
         pygame.draw.line(self.screen, C_PANEL_EDGE,
                          (rx, TOP_H + 40), (rx + RIGHT_W, TOP_H + 40), 1)
 
-        # --- 5 sparkline charts ---
-        # Available height below the title strip
-        avail_h = self.map_px - 40
-        chart_margin = 6
-        n_charts = 5
-        chart_h = (avail_h - chart_margin * (n_charts + 1)) // n_charts
-        chart_w = RIGHT_W - chart_margin * 2
+        # ── Chart definitions (training vs testing) ──────────────────────────
+        if is_testing:
+            charts = [
+                (getattr(agent, 'test_live_rewards', []), (80,  200, 120), 'Reward'),
+                (getattr(agent, 'test_live_steps',   []), (255, 165,  60), 'Steps / Episode'),
+                (getattr(agent, 'test_live_success', []), (80,  220, 220), 'Success (1=Yes)'),
+            ]
+        else:
+            charts = [
+                (getattr(agent, 'live_rewards',  []), (80,  200, 120), 'Reward'),
+                (getattr(agent, 'live_epsilons', []), (80,  160, 255), 'Epsilon Decay'),
+                (getattr(agent, 'live_steps',    []), (255, 165,  60), 'Steps / Episode'),
+                (getattr(agent, 'live_errors',   []), (255,  80, 100), 'TD Error'),
+                (getattr(agent, 'live_path_eff', []), (180, 130, 255), 'Path Efficiency'),
+            ]
 
-        charts = [
-            (getattr(agent, 'live_rewards',  []), (80,  200, 120), 'Reward'),
-            (getattr(agent, 'live_epsilons', []), (80,  160, 255), 'Epsilon Decay'),
-            (getattr(agent, 'live_steps',    []), (255, 165,  60), 'Steps / Episode'),
-            (getattr(agent, 'live_errors',   []), (255,  80, 100), 'TD Error'),
-            (getattr(agent, 'live_path_eff', []), (180, 130, 255), 'Path Efficiency'),
-        ]
+        n_charts     = len(charts)
+        avail_h      = self.map_px - 40
+        chart_margin = 6
+        chart_h      = (avail_h - chart_margin * (n_charts + 1)) // n_charts
+        chart_w      = RIGHT_W - chart_margin * 2
 
         for idx, (data, colour, label) in enumerate(charts):
-            cy = TOP_H + 40 + chart_margin + idx * (chart_h + chart_margin)
+            cy   = TOP_H + 40 + chart_margin + idx * (chart_h + chart_margin)
             rect = pygame.Rect(rx + chart_margin, cy, chart_w, chart_h)
             self._draw_sparkline(data, rect, colour, label, self.screen)
 

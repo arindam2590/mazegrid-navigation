@@ -27,6 +27,7 @@ class Agent:
         self.batch_size = self.params['BATCH_SIZE']
         self.model_filename = None
         self.game_steps = 0
+        self.max_steps  = 200   # overwritten by Simulation after A* path is found
         self.epch = 1   # set to the current trial number by Simulation
 
         if torch.cuda.is_available():
@@ -59,12 +60,18 @@ class Agent:
         self.live_path_eff  = []   # path efficiency (optimal / steps), 0 if failed
         self._optimal_path_len = 0  # set once path is known
 
+        # Testing live history — updated after each test episode
+        self.test_live_rewards = []   # test episode return
+        self.test_live_steps   = []   # test steps per episode
+        self.test_live_success = []   # test success (1/0) per episode
+
     def move(self, direction):
         self.position += direction
 
     def reset(self):
-        self.position = np.array(self.env.source)
+        self.position       = np.array(self.env.source)
         self.visited_states = set()
+        self.game_steps     = 0   # must reset so every episode has a full step budget
         return self._get_state()
 
     def _get_state(self):
@@ -74,7 +81,7 @@ class Agent:
     def step(self, action):
         self.game_steps += 1
         terminated, truncated, info = False, False, {'Success': False}
-        direction = np.array((self.env.directions[action][0], self.env.directions[action][1]))
+        direction    = np.array((self.env.directions[action][0], self.env.directions[action][1]))
         new_position = [self.position[0] + direction[0], self.position[1] + direction[1]]
 
         if self.env.is_valid_position(new_position):
@@ -87,7 +94,7 @@ class Agent:
                 info['Success'] = True
             else:
                 reward = 0.05
-                if self.game_steps >= 200:
+                if self.game_steps >= self.max_steps:
                     truncated = True
                     self.game_steps = 0
                 else:
@@ -131,7 +138,11 @@ class Agent:
             state = self.reset()
             done, returns, step, success_status, loss = False, 0, 0, 0, 0.0
             while True:
-                self.env.update_display(self) if render else None
+                if render:
+                    self.env.update_display(self)
+                    if self.env.quit_requested:
+                        done = True
+                        break
                 time_steps += 1
                 pth.append(self.position.copy())
 
@@ -171,6 +182,10 @@ class Agent:
 
                 if len(self.model.replay_buffer.buffer) > self.batch_size:
                     loss = self.model.train(self.batch_size)
+
+            if self.env.quit_requested:
+                print('Info: Window closed — stopping training early.')
+                break
             self.model.epsilon = max(self.model.epsilon * self.model.epsilon_decay, self.model.epsilon_min)
             unique_steps_per_episode[episode] = len(self.visited_states)
             returns_per_episode[episode] = returns
@@ -222,9 +237,17 @@ class Agent:
     def test_value_agent(self, episodes, render):
         print(f'Info: Testing of the Agent has been started over the Maze Simulation...')
         print(f'Info: Source: {self.env.source} Destination: {self.env.destination}')
+        print(f'Info: Loading model → {self.model_filename}')
         print(f'-' * 147)
 
-        success_rate = np.zeros(episodes)
+        if self.model_filename is None:
+            print('Exception: model_filename is not set — cannot load weights.')
+            exit(0)
+
+        returns_per_episode = np.zeros(episodes)
+        steps_per_episode   = np.zeros(episodes)
+        success_per_episode = np.zeros(episodes)
+
         if os.path.exists(self.model_save_path):
             file_path = self.model_save_path + self.model_filename
             if os.path.isfile(file_path):
@@ -234,41 +257,65 @@ class Agent:
             else:
                 print(f'Exception: Model file is not exists. Unable to load saved model weight!!')
                 exit(0)
-
         else:
             print(f'Exception: The Data directory is not exists. Unable to load saved model weight!!')
             exit(0)
+
         self.model.main_network.eval()
+
+        self.total_episodes    = episodes   # left-panel denominator
+        self.cumulative_reward = 0.0        # reset for clean test display
 
         for episode in range(episodes):
             state = self.reset()
+            self.current_episode = episode              # ← left panel: episode counter
+            self.episode_reward  = 0.0                 # ← left panel: per-episode reward
             done, returns, step, success_status = False, 0, 0, 0
             while not done:
-                self.env.update_display(self) if render else None
+                if render:
+                    self.env.update_display(self)
+                    if self.env.quit_requested:
+                        done = True
+                        break
                 with torch.no_grad():
-                    action = self.model.main_network(self.model.encode_state(state).to(self.device)).argmax().item()
+                    action = self.model.main_network(
+                        self.model.encode_state(state).to(self.device)
+                    ).argmax().item()
 
                 new_state, reward, terminated, truncated, info = self.step(action)
-
-                state = new_state
-                step += 1
-                done = terminated or truncated
+                state   = new_state
+                step   += 1
+                done    = terminated or truncated
                 returns += reward
+                self.episode_reward    = returns
+                self.cumulative_reward += reward
 
                 if info['Success']:
                     success_status = 1
-            print(f'Episode {episode + 1}/{episodes} - Steps: {step}, Return: {returns:.2f}')
-            success_rate[episode] = success_status
+                    self.goal_count += 1
 
+            returns_per_episode[episode] = returns
+            steps_per_episode[episode]   = step
+            success_per_episode[episode] = success_status
+            # Update right-panel sparklines
+            self.test_live_rewards.append(float(returns))
+            self.test_live_steps.append(float(step))
+            self.test_live_success.append(float(success_status))
+            print(f'Episode {episode + 1}/{episodes} - Steps: {step}, '
+                  f'Return: {returns:.2f}, Success: {bool(success_status)}')
+
+            if self.env.quit_requested:
+                print('Info: Window closed — stopping testing early.')
+                break
+
+        success_pct = success_per_episode.mean() * 100
         print(f'-' * 147)
-        print(f'Info: Testing has been completed...')
-        return [None, None, None, None, success_rate]
-
-    def train_policy_agent(self, episodes, render):
-        pass
-
-    def test_policy_agent(self, episodes, render):
-        pass
+        print(f'Info: Testing completed — Success rate: {success_pct:.1f}%')
+        return {
+            'returns':  returns_per_episode,
+            'steps':    steps_per_episode,
+            'success':  success_per_episode,
+        }
 
     def save_model(self, is_policy_model):
         if is_policy_model:

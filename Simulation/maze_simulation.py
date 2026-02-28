@@ -49,7 +49,7 @@ class Simulation:
     # -----------------------------------------------------------------------
     def __init__(self, args, train_mode: bool,
                  train_episodes: int = 100, render: bool = False,
-                 trial: int = 1):
+                 trial: int = 1, test_episodes: int = None):
 
         self.params = self._load_params()
         print(f'\n{HEADER}')
@@ -81,7 +81,8 @@ class Simulation:
         # Runtime flags
         self.train_mode        = train_mode
         self.train_episodes    = train_episodes
-        self.test_episodes     = self.params.get('TEST_EPISODES', 50)
+        self.test_episodes     = test_episodes if test_episodes is not None \
+                                 else self.params.get('TEST_EPISODES', 50)
         self.render            = render
         self.running           = True
         self.is_trained        = None
@@ -155,6 +156,14 @@ class Simulation:
         vis.plot_training_error()
         vis.plot_epsilon_decay()
 
+    def _save_and_plot_test(self, test_result: dict):
+        """Persist test results to Excel (no plots — test has no epsilon/loss curves)."""
+        vis = DataVisualization(
+            self.train_episodes, None, self.agent.model_name, 'VALUE',
+            trial=self.agent.epch
+        )
+        vis.save_test_data(test_result, self.test_episodes)
+
     # -----------------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------------
@@ -180,14 +189,30 @@ class Simulation:
                 print(DIVIDER)
                 self.is_trained = True
 
-            # --- Testing phase (placeholder — extend here) ---
+            # --- Testing phase ---
             if (self.is_trained or not self.train_mode) and not self.is_test_completed:
-                break   # exit loop; testing logic to be added here
+                print('=' * 65 + ' Testing Phase  ' + '=' * 66)
+                self.env.mode = 'TESTING'
+
+                t0          = time.time()
+                test_result = self.agent.test_value_agent(self.test_episodes, self.render)
+                self._save_and_plot_test(test_result)
+
+                elapsed = time.time() - t0
+                print(f'Info: Testing completed in {elapsed:.2f} s')
+                print(DIVIDER)
+                self.is_test_completed = True
+                break
 
     def game_initialize(self):
         """Set up agent position, A* path, pygame display, and RL model."""
         self.agent.position = np.array(self.env.source)
         self.env.find_path()
+
+        # Step budget = optimal path length + 20 exploration slack
+        optimal_len = len(self.env.path) - 1 if self.env.path else 200
+        self.agent.max_steps = optimal_len + 20
+        print(f'Info: Optimal path length: {optimal_len}  →  max_steps set to {self.agent.max_steps}')
 
         if self.render:
             self.env.env_setup()
@@ -200,6 +225,19 @@ class Simulation:
         print(DIVIDER)
 
         self._init_model()
+
+        # In test-only mode, resolve the model filename automatically so the
+        # correct saved weights are loaded without any manual configuration.
+        if not self.train_mode:
+            sz         = self.params['SIZE']
+            difficulty = self.params.get('DIFFICULTY', 'simple')
+            self.agent.model_filename = (
+                f"{self.agent.model_name}_{self.train_episodes}_episode_"
+                f"{sz}x{sz}_{difficulty}_Trial_{self.agent.epch}_best.pt"
+            )
+            self.env.mode = 'TESTING'   # ← set immediately so right panel shows test charts from frame 1
+            print(f'Info: Test-only mode — model file: {self.agent.model_filename}')
+
         print(DIVIDER)
 
     def event_on_game_window(self):
