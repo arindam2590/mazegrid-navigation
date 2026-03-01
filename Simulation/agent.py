@@ -40,7 +40,7 @@ class Agent:
         self.visited_states = None
         self.max_no_progress_steps = 10
         self.no_progress_steps = 0
-        self.last_distance_to_goal = None
+        self.last_distance_to_goal = np.inf
 
         self.success_episodes = []
         self.total_steps = []
@@ -103,6 +103,13 @@ class Agent:
                         self.visited_states.add(tuple(self.position))
                     else:
                         reward -= 0.07
+
+                    current_dist_to_goal = self.env.distance_to_goal(self.position)
+                    if current_dist_to_goal <= self.last_distance_to_goal:
+                        reward += 0.05
+                        self.last_distance_to_goal = current_dist_to_goal
+                    else:
+                        reward -= 0.10
         else:
             reward = -0.75
             terminated = True

@@ -216,6 +216,10 @@ class MazeEnv:
             location = np.vstack((self.source, self.destination))
             np.save(self.data_dir + filename, location)
 
+    def distance_to_goal(self, agent_position):
+        dist = np.linalg.norm(agent_position - self.destination)
+        return dist
+
     def is_valid_position(self, position):
         x, y = position
         return (0 <= x < self.maze_size and
